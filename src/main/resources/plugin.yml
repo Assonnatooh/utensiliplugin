@@ -1,0 +1,13 @@
+name: UtensiliPlugin
+version: 1.0.0
+main: it.assonnatooh.utensili.UtensiliPlugin
+api-version: '1.20'
+commands:
+  utensili:
+    description: Apre la GUI degli utensili speciali
+    usage: /utensili
+    permission: utensili.staff
+permissions:
+  utensili.staff:
+    description: Permette di aprire la GUI degli utensili
+    default: op
