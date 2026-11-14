@@ -11,7 +11,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
-import org.bukkit.Sound;
 import org.bukkit.Tag;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
@@ -49,7 +48,6 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
     private NamespacedKey toolKey;
     private final Map<UUID, BreakSession> sessions = new HashMap<>();
     private final Set<String> occupiedBlocks = new HashSet<>();
-    // Le porte restano contrassegnate per tutti i tre minuti in cui sono aperte.
     private final Set<String> breachedDoors = new HashSet<>();
 
     @Override
@@ -105,7 +103,6 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
         String tool = getTool(event.getView().getTopInventory().getItem(slot));
         if (tool != null) {
             giveTool(player, createTool(tool));
-            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.7f, 1.2f);
         }
     }
 
@@ -130,16 +127,13 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
         lower.setType(Material.AIR, false);
         upper.setType(Material.AIR, false);
         lower.getWorld().dropItemNaturally(lower.getLocation(), new ItemStack(doorItem));
-        player.playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_BREAK, 1.0f, 0.9f);
 
         Bukkit.getScheduler().runTaskLater(this, () -> {
-            // Non sovrascrivere blocchi collocati nell'area mentre la porta era rimossa.
             if (lower.getType() != Material.AIR || upper.getType() != Material.AIR) {
                 return;
             }
             restoreBlock(lower, lowerState.getBlockData());
             restoreBlock(upper, upperState.getBlockData());
-            lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_OPEN, 0.8f, 0.8f);
         }, RESTORE_TICKS);
     }
 
@@ -306,7 +300,6 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             for (Block block : blocks) {
                 originalData.put(block, block.getBlockData().clone());
             }
-            // La boss bar verde si riempie progressivamente anche quando si sfondano le sbarre.
             bar = Bukkit.createBossBar(ChatColor.GRAY + "Sfondamento in corso...", BarColor.GREEN, BarStyle.SOLID);
             bar.setProgress(0.0);
             bar.addPlayer(player);
@@ -345,7 +338,6 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             } else if (initialTarget.getType() == Material.IRON_BARS) {
                 removeAndRestoreIronBars();
             } else {
-                // Ariete sulle porte in legno: rimozione temporanea per tre minuti.
                 removeAndRestoreWoodenDoor();
             }
             player.sendMessage(ChatColor.GREEN + "Blocco sfondato!");
@@ -359,16 +351,13 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             breachedDoors.add(doorKey);
             setDoorOpen(lower, true);
             setDoorOpen(upper, true);
-            initialTarget.getWorld().playSound(initialTarget.getLocation(), Sound.BLOCK_IRON_DOOR_OPEN, 1.0f, 0.8f);
 
             Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
-                // Ripristina la porta chiusa solo se è ancora la stessa porta aperta.
                 if (isIronDoor(lower) && isIronDoor(upper)
                         && ((Door) lower.getBlockData()).isOpen()
                         && ((Door) upper.getBlockData()).isOpen()) {
                     restoreBlock(lower, originalData.get(lower));
                     restoreBlock(upper, originalData.get(upper));
-                    lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_IRON_DOOR_CLOSE, 1.0f, 0.8f);
                 }
                 breachedDoors.remove(doorKey);
             }, RESTORE_TICKS);
@@ -378,11 +367,10 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             Block bars = blocks.get(0);
             BlockData original = originalData.get(bars).clone();
             bars.setType(Material.AIR, false);
-            bars.getWorld().playSound(bars.getLocation(), Sound.BLOCK_IRON_DOOR_BREAK, 1.0f, 0.8f);
+
             Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
                 if (bars.getType() == Material.AIR) {
                     restoreBlock(bars, original);
-                    bars.getWorld().playSound(bars.getLocation(), Sound.BLOCK_IRON_DOOR_CLOSE, 0.8f, 0.8f);
                 }
             }, RESTORE_TICKS);
         }
@@ -394,12 +382,11 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             Block lower = blocks.get(0);
             BlockData lowerData = originalData.get(blocks.get(0)).clone();
             BlockData upperData = originalData.get(blocks.get(1)).clone();
-            lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_BREAK, 1.0f, 0.8f);
+
             Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
                 if (blocks.get(0).getType() == Material.AIR && blocks.get(1).getType() == Material.AIR) {
                     restoreBlock(blocks.get(0), lowerData);
                     restoreBlock(blocks.get(1), upperData);
-                    lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_OPEN, 0.8f, 0.8f);
                 }
             }, RESTORE_TICKS);
         }
