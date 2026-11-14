@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
@@ -18,12 +17,16 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.type.Door;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -34,20 +37,20 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.boss.BarColor;
-import org.bukkit.boss.BarStyle;
-import org.bukkit.boss.BossBar;
 import org.bukkit.scheduler.BukkitTask;
-import org.bukkit.event.block.Action;
 
 public final class UtensiliPlugin extends JavaPlugin implements Listener, CommandExecutor {
     private static final String RAM = "ram";
     private static final String CROWBAR = "crowbar";
     private static final String AXE = "axe";
     private static final long BREAK_TICKS = 8L * 20L;
+    private static final long RESTORE_TICKS = 3L * 60L * 20L;
+
     private NamespacedKey toolKey;
     private final Map<UUID, BreakSession> sessions = new HashMap<>();
     private final Set<String> occupiedBlocks = new HashSet<>();
+    // Le porte restano contrassegnate per tutti i tre minuti in cui sono aperte.
+    private final Set<String> breachedDoors = new HashSet<>();
 
     @Override
     public void onEnable() {
@@ -99,8 +102,7 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
         if (slot < 0 || slot >= event.getView().getTopInventory().getSize()) {
             return;
         }
-        ItemStack selected = event.getView().getTopInventory().getItem(slot);
-        String tool = getTool(selected);
+        String tool = getTool(event.getView().getTopInventory().getItem(slot));
         if (tool != null) {
             giveTool(player, createTool(tool));
             player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.7f, 1.2f);
@@ -138,7 +140,7 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             restoreBlock(lower, lowerState.getBlockData());
             restoreBlock(upper, upperState.getBlockData());
             lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_OPEN, 0.8f, 0.8f);
-        }, 20L * 60L * 3L);
+        }, RESTORE_TICKS);
     }
 
     @EventHandler
@@ -162,6 +164,17 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
         if (!validTarget) {
             return;
         }
+
+        if (isIronDoor(target)) {
+            Block lowerDoor = lowerDoorHalf(target);
+            String doorKey = blockKey(lowerDoor);
+            Door doorData = (Door) lowerDoor.getBlockData();
+            if (breachedDoors.contains(doorKey) || doorData.isOpen()) {
+                event.getPlayer().sendMessage(ChatColor.RED + "Questa porta è già aperta/sfondata.");
+                return;
+            }
+        }
+
         if (sessions.containsKey(event.getPlayer().getUniqueId())) {
             event.getPlayer().sendMessage(ChatColor.RED + "Stai già sfondando un blocco.");
             return;
@@ -293,6 +306,7 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
             for (Block block : blocks) {
                 originalData.put(block, block.getBlockData().clone());
             }
+            // La boss bar verde si riempie progressivamente anche quando si sfondano le sbarre.
             bar = Bukkit.createBossBar(ChatColor.GRAY + "Sfondamento in corso...", BarColor.GREEN, BarStyle.SOLID);
             bar.setProgress(0.0);
             bar.addPlayer(player);
@@ -318,19 +332,83 @@ public final class UtensiliPlugin extends JavaPlugin implements Listener, Comman
 
         private boolean isStillValid() {
             if (isDoor(initialTarget)) {
-                return blocks.size() == 2 && originalData.get(blocks.get(0)).getMaterial() == blocks.get(0).getType()
+                return blocks.size() == 2
+                        && originalData.get(blocks.get(0)).getMaterial() == blocks.get(0).getType()
                         && originalData.get(blocks.get(1)).getMaterial() == blocks.get(1).getType();
             }
             return initialTarget.getType() == Material.IRON_BARS;
         }
 
         private void finish() {
+            if (isIronDoor(initialTarget)) {
+                openIronDoorForThreeMinutes();
+            } else if (initialTarget.getType() == Material.IRON_BARS) {
+                removeAndRestoreIronBars();
+            } else {
+                // Ariete sulle porte in legno: rimozione temporanea per tre minuti.
+                removeAndRestoreWoodenDoor();
+            }
+            player.sendMessage(ChatColor.GREEN + "Blocco sfondato!");
+            cancel(false);
+        }
+
+        private void openIronDoorForThreeMinutes() {
+            Block lower = blocks.get(0);
+            Block upper = blocks.get(1);
+            String doorKey = blockKey(lower);
+            breachedDoors.add(doorKey);
+            setDoorOpen(lower, true);
+            setDoorOpen(upper, true);
+            initialTarget.getWorld().playSound(initialTarget.getLocation(), Sound.BLOCK_IRON_DOOR_OPEN, 1.0f, 0.8f);
+
+            Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
+                // Ripristina la porta chiusa solo se è ancora la stessa porta aperta.
+                if (isIronDoor(lower) && isIronDoor(upper)
+                        && ((Door) lower.getBlockData()).isOpen()
+                        && ((Door) upper.getBlockData()).isOpen()) {
+                    restoreBlock(lower, originalData.get(lower));
+                    restoreBlock(upper, originalData.get(upper));
+                    lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_IRON_DOOR_CLOSE, 1.0f, 0.8f);
+                }
+                breachedDoors.remove(doorKey);
+            }, RESTORE_TICKS);
+        }
+
+        private void removeAndRestoreIronBars() {
+            Block bars = blocks.get(0);
+            BlockData original = originalData.get(bars).clone();
+            bars.setType(Material.AIR, false);
+            bars.getWorld().playSound(bars.getLocation(), Sound.BLOCK_IRON_DOOR_BREAK, 1.0f, 0.8f);
+            Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
+                if (bars.getType() == Material.AIR) {
+                    restoreBlock(bars, original);
+                    bars.getWorld().playSound(bars.getLocation(), Sound.BLOCK_IRON_DOOR_CLOSE, 0.8f, 0.8f);
+                }
+            }, RESTORE_TICKS);
+        }
+
+        private void removeAndRestoreWoodenDoor() {
             for (Block block : blocks) {
                 block.setType(Material.AIR, false);
             }
-            initialTarget.getWorld().playSound(initialTarget.getLocation(), Sound.BLOCK_IRON_DOOR_BREAK, 1.0f, 0.8f);
-            player.sendMessage(ChatColor.GREEN + "Blocco sfondato!");
-            cancel(false);
+            Block lower = blocks.get(0);
+            BlockData lowerData = originalData.get(blocks.get(0)).clone();
+            BlockData upperData = originalData.get(blocks.get(1)).clone();
+            lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_BREAK, 1.0f, 0.8f);
+            Bukkit.getScheduler().runTaskLater(UtensiliPlugin.this, () -> {
+                if (blocks.get(0).getType() == Material.AIR && blocks.get(1).getType() == Material.AIR) {
+                    restoreBlock(blocks.get(0), lowerData);
+                    restoreBlock(blocks.get(1), upperData);
+                    lower.getWorld().playSound(lower.getLocation(), Sound.BLOCK_WOODEN_DOOR_OPEN, 0.8f, 0.8f);
+                }
+            }, RESTORE_TICKS);
+        }
+
+        private void setDoorOpen(Block block, boolean open) {
+            if (block.getBlockData() instanceof Door door) {
+                door.setOpen(open);
+                block.setBlockData(door, false);
+            }
         }
 
         private void cancel(boolean notify) {
